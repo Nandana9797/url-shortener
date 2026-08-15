@@ -1,0 +1,21 @@
+push to main
+     ↓
+GitHub Actions starts
+     ↓
+Checkout code
+     ↓
+Install Python
+     ↓
+Install dependencies
+     ↓
+Lint
+     ↓
+pytest
+     ↓
+docker build
+     ↓
+Trivy scan
+     ↓
+docker login
+     ↓
+docker push
