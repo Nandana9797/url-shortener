@@ -1,29 +1,53 @@
+# =========================
+# Stage 1: Build
+# =========================
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-COPY app/requirements.txt .
+COPY requirements.txt .
 
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
-
-
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt && \
+    /opt/venv/bin/pip uninstall -y setuptools
+# =========================
+# Stage 2: Production
+# =========================
 FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN useradd --create-home --shell /bin/bash appuser
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
 
-COPY --from=builder /install /usr/local
+# Put virtual environment first in PATH
+ENV PATH="/opt/venv/bin:$PATH"
 
-COPY app/ .
+# Create non-root user
+RUN useradd \
+    --create-home \
+    --shell /bin/bash \
+    appuser
 
+# Copy application
+COPY app ./app
+
+# Change ownership
 RUN chown -R appuser:appuser /app
 
+# Run as non-root user
 USER appuser
 
-EXPOSE 5000
+# Application port
+EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
+# Container health check
+HEALTHCHECK --interval=30s \
+            --timeout=5s \
+            --start-period=10s \
+            --retries=3 \
+            CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-CMD ["python", "app.py"]
+# Start FastAPI
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

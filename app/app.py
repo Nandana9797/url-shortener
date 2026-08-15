@@ -1,10 +1,11 @@
-from flask import Flask, request, jsonify, redirect
-import mysql.connector
-import redis
 import os
 import random
 import string
-from datetime import datetime
+from datetime import datetime, timezone
+
+import mysql.connector
+import redis
+from flask import Flask, jsonify, redirect, request
 
 app = Flask(__name__)
 
@@ -59,7 +60,7 @@ def shorten():
         INSERT INTO urls (original_url, short_code, created_at, click_count)
         VALUES (%s, %s, %s, %s)
         """,
-        (original_url, short_code, datetime.now(), 0)
+        (original_url, short_code, datetime.now(timezone.utc), 0)
     )
 
     db.commit()
