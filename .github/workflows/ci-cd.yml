@@ -1,21 +1,210 @@
-push to main
-     ↓
-GitHub Actions starts
-     ↓
-Checkout code
-     ↓
-Install Python
-     ↓
-Install dependencies
-     ↓
-Lint
-     ↓
-pytest
-     ↓
-docker build
-     ↓
-Trivy scan
-     ↓
-docker login
-     ↓
-docker push
+name: URL Shortener CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/url-shortener
+
+
+jobs:
+
+  # ============================================================
+  # 1. CHECKOUT
+  # ============================================================
+  checkout:
+    name: Checkout
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Upload source code
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-code
+          path: .
+          include-hidden-files: true
+
+
+  # ============================================================
+  # 2. LINT
+  # ============================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+
+    needs: checkout
+
+    steps:
+      - name: Download source code
+        uses: actions/download-artifact@v4
+        with:
+          name: source-code
+          path: .
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Run Ruff
+        run: ruff check app tests
+
+
+  # ============================================================
+  # 3. UNIT TEST
+  # ============================================================
+  test:
+    name: Unit Test
+    runs-on: ubuntu-24.04
+
+    needs: lint
+
+    steps:
+      - name: Download source code
+        uses: actions/download-artifact@v4
+        with:
+          name: source-code
+          path: .
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -v
+
+
+  # ============================================================
+  # 4. BUILD DOCKER IMAGE
+  # ============================================================
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-24.04
+
+    needs: test
+
+    steps:
+      - name: Download source code
+        uses: actions/download-artifact@v4
+        with:
+          name: source-code
+          path: .
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t url-shortener:${{ github.sha }} \
+            .
+
+      - name: Save Docker image
+        run: |
+          docker save \
+            url-shortener:${{ github.sha }} \
+            -o url-shortener.tar
+
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: url-shortener.tar
+          retention-days: 1
+
+
+  # ============================================================
+  # 5. SCAN IMAGE
+  # ============================================================
+  scan:
+    name: Scan Image
+    runs-on: ubuntu-24.04
+
+    needs: build
+
+    steps:
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: .
+
+      - name: Load Docker image
+        run: |
+          docker load -i url-shortener.tar
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: url-shortener:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          scanners: vuln
+          vuln-type: os
+          severity: CRITICAL,HIGH
+
+
+  # ============================================================
+  # 6. PUSH DOCKER HUB
+  # ============================================================
+  push:
+    name: Push Docker Hub
+    runs-on: ubuntu-24.04
+
+    needs: scan
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: .
+
+      - name: Load Docker image
+        run: |
+          docker load -i url-shortener.tar
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Tag v1.0
+        run: |
+          docker tag \
+            url-shortener:${{ github.sha }} \
+            ${{ env.IMAGE_NAME }}:v1.0
+
+      - name: Tag latest
+        run: |
+          docker tag \
+            url-shortener:${{ github.sha }} \
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: Push v1.0
+        run: |
+          docker push \
+            ${{ env.IMAGE_NAME }}:v1.0
+
+      - name: Push latest
+        run: |
+          docker push \
+            ${{ env.IMAGE_NAME }}:latest
